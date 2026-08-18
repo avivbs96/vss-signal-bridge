@@ -69,6 +69,21 @@ docker run --rm -v "<repo>:/app" -v vss-cargo-registry:/usr/local/cargo/registry
 # → 62.1371
 ```
 
+**Watching it work** — the transformer logs every update as it flows through the pipeline:
+
+```
+docker logs -f vss-transformer
+```
+
+```
+Subscribed to 3 paths: ["Vehicle.Speed", ...]
+Vehicle.Speed: Float(100.0) -[kmh_to_mph]-> Float(62.1371)
+Vehicle.Cabin.Door.Row1.DriverSide.IsOpen: Bool(true) -[passthrough]-> Bool(true)
+```
+
+Each line shows: raw value received from KUKSA → which transform was applied → the
+cached result. (`docker logs -f databroker` shows the broker side.)
+
 **Tests:** `cargo test -p transformer` (transform functions are pure — unit tested).
 
 ## API
