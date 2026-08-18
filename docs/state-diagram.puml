@@ -1,0 +1,90 @@
+@startuml vss-transformer-states
+title VssDataTransformer — Lifecycle
+
+[*] --> LoadConfig
+
+state "Load config.yaml" as LoadConfig
+state "Spawn tasks" as Spawn
+
+LoadConfig --> Spawn : config valid
+LoadConfig --> [*] : config invalid → fail fast
+
+state "KUKSA subscriber (background task)" as KuksaSide {
+  state "Connect\nValClient::connect" as Dial
+  state "Subscribe\nconfigured paths" as Sub
+  state "Listen\nawait next pushed message" as Listen
+  state "Process update\nextract → transform → cache" as Process
+  state "Backoff\n1s → 2s → 4s ... capped at 30s" as Backoff
+
+  Dial --> Sub : connected
+  Sub --> Listen : stream open +\ncurrent values arrive immediately
+  Listen --> Process : message pushed
+  Process --> Listen : back to sleep
+  Dial --> Backoff : connect failed
+  Sub --> Backoff : subscribe failed
+  Listen --> Backoff : stream closed / dropped
+  Backoff --> Dial : retry
+}
+
+state "REST API (foreground)" as RestSide {
+  state "Listening on :8080" as Serve
+  state "Handle request" as Handle
+
+  Serve --> Handle : GET /signals/{path}
+  Handle --> Serve : 200 / 404 / 503
+}
+
+Spawn --> Dial
+Spawn --> Serve
+
+note right of Process
+  e.g. Vehicle.Speed = 100 km/h
+  × 0.621371
+  → 62.1371 mph stored in cache
+end note
+
+note right of Handle
+  path not configured → 404
+  no value received yet → 503
+  value cached → 200 + JSON
+  (memory read only —
+  never calls KUKSA)
+end note
+
+note bottom of Backoff
+  While disconnected the cache
+  keeps serving the last known value.
+  The two sides are independent.
+end note
+
+@enduml
+
+@startuml vss-query-flow
+title Query flow
+
+|Client CLI|
+start
+:vss-client --path Vehicle.Speed;
+:build URL + send HTTP GET;
+
+|Transformer :8080|
+:route matches /signals/{path};
+if (path configured?) then (no)
+  :404 + list of known paths;
+  detach
+else (yes)
+  if (value in cache?) then (no)
+    :503 "no value yet";
+    detach
+  else (yes)
+    :read cache under read-lock;
+    :serialize to JSON;
+    :200 OK;
+  endif
+endif
+
+|Client CLI|
+:print value to stdout;
+stop
+
+@enduml
