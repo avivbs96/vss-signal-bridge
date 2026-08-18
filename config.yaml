@@ -1,0 +1,11 @@
+kuksa:
+  address: "http://127.0.0.1:55555"
+server:
+  listen: "0.0.0.0:8080"
+subscriptions:
+  - path: Vehicle.Speed
+    transform: kmh_to_mph
+  - path: Vehicle.Cabin.Door.Row1.DriverSide.IsOpen
+    transform: passthrough
+  - path: Vehicle.Powertrain.TractionBattery.StateOfCharge.Current
+    transform: passthrough

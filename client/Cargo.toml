@@ -1,0 +1,10 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "vss-client"
+path = "src/main.rs"
+
+[dependencies]

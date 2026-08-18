@@ -1,0 +1,17 @@
+[package]
+name = "transformer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+anyhow = "1"
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
