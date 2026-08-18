@@ -1,3 +1,4 @@
+mod api;
 mod cache;
 mod config;
 mod transforms;
@@ -10,12 +11,14 @@ pub mod kuksa {
     }
 }
 
-use cache::CachedSignal;
+use cache::{CachedSignal, SignalCache};
 use kuksa::val::v1::{
     datapoint::Value as ProtoValue, val_client::ValClient, Datapoint, Field, SubscribeEntry,
     SubscribeRequest, View,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
 use transforms::SignalValue;
 
 fn extract(dp: &Datapoint) -> Option<SignalValue> {
@@ -32,21 +35,16 @@ fn extract(dp: &Datapoint) -> Option<SignalValue> {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cfg = config::load("config.yaml")?;
-    let transforms_by_path: HashMap<String, String> = cfg
-        .subscriptions
-        .iter()
-        .map(|s| (s.path.clone(), s.transform.clone()))
-        .collect();
-    let signals = cache::new_cache();
+/// One subscribe session: connect, subscribe, consume the stream until it ends.
+async fn subscribe_once(
+    address: &str,
+    subscriptions: &[config::Subscription],
+    transforms_by_path: &HashMap<String, String>,
+    signals: &SignalCache,
+) -> anyhow::Result<()> {
+    let mut client = ValClient::connect(address.to_string()).await?;
 
-    println!("Connecting to KUKSA at {}", cfg.kuksa.address);
-    let mut client = ValClient::connect(cfg.kuksa.address.clone()).await?;
-
-    let entries: Vec<SubscribeEntry> = cfg
-        .subscriptions
+    let entries: Vec<SubscribeEntry> = subscriptions
         .iter()
         .map(|s| SubscribeEntry {
             path: s.path.clone(),
@@ -56,9 +54,9 @@ async fn main() -> anyhow::Result<()> {
         .collect();
 
     println!(
-        "Subscribing to {} paths: {:?}",
+        "Subscribed to {} paths: {:?}",
         entries.len(),
-        cfg.subscriptions.iter().map(|s| &s.path).collect::<Vec<_>>()
+        subscriptions.iter().map(|s| &s.path).collect::<Vec<_>>()
     );
 
     let mut stream = client
@@ -89,7 +87,52 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     }
+    Ok(())
+}
 
-    println!("Stream closed by server");
+/// Keep the subscription alive forever, reconnecting with exponential backoff.
+/// The cache keeps serving the last known values while disconnected.
+async fn run_subscriber(cfg: config::Config, signals: SignalCache) {
+    let transforms_by_path: HashMap<String, String> = cfg
+        .subscriptions
+        .iter()
+        .map(|s| (s.path.clone(), s.transform.clone()))
+        .collect();
+
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        println!("Connecting to KUKSA at {}", cfg.kuksa.address);
+        match subscribe_once(&cfg.kuksa.address, &cfg.subscriptions, &transforms_by_path, &signals)
+            .await
+        {
+            Ok(()) => println!("Stream closed by server, reconnecting"),
+            Err(e) => println!("Subscription error: {e}, retrying in {backoff:?}"),
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(Duration::from_secs(30));
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cfg = config::load("config.yaml")?;
+    let signals = cache::new_cache();
+
+    let state = api::ApiState {
+        signals: signals.clone(),
+        configured_paths: Arc::new(
+            cfg.subscriptions
+                .iter()
+                .map(|s| s.path.clone())
+                .collect::<HashSet<_>>(),
+        ),
+    };
+    let listen = cfg.server.listen.clone();
+
+    tokio::spawn(run_subscriber(cfg, signals));
+
+    println!("Serving REST API on {listen}");
+    let listener = tokio::net::TcpListener::bind(&listen).await?;
+    axum::serve(listener, api::router(state)).await?;
     Ok(())
 }

@@ -8,3 +8,6 @@ name = "vss-client"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"
